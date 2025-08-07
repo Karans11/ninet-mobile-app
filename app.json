@@ -65,7 +65,10 @@
       },
       "eas": {
         "projectId": "your-project-id-will-be-auto-generated"
-      }
+      },
+      "apiUrl": "https://ai-news-api.skaybotlabs.workers.dev",
+      "supabaseUrl": "your_supabase_url_here",
+      "supabaseAnonKey": "your_supabase_anon_key_here"
     }
   }
 }

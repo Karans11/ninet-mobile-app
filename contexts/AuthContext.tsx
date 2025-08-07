@@ -1,19 +1,15 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+// contexts/AuthContext.tsx - REPLACE COMPLETELY
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Alert, Platform } from 'react-native';
 import { Session, User, AuthError } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase';
-import { SecureStore } from '@/lib/storage';
+import { supabase } from '../lib/supabase';
 
-// Only import LocalAuthentication on native platforms
-let LocalAuthentication: any;
-if (Platform.OS !== 'web') {
-  LocalAuthentication = require('expo-local-authentication');
-}
-
+// Use the same interface as your PWA
 interface UserProfile {
   id: string;
   email: string;
   full_name?: string;
+  role: 'user' | 'admin';
   avatar_url?: string;
   created_at: string;
   updated_at: string;
@@ -21,46 +17,50 @@ interface UserProfile {
 
 interface AuthContextType {
   user: User | null;
-  session: Session | null;
   profile: UserProfile | null;
+  session: Session | null;
   loading: boolean;
   signUp: (email: string, password: string, fullName?: string) => Promise<{ error: AuthError | null }>;
   signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>;
-  signInWithBiometric: () => Promise<{ error: AuthError | null }>;
+  signInWithGoogle: () => Promise<{ error: AuthError | null }>;
   signOut: () => Promise<{ error: AuthError | null }>;
-  updateProfile: (updates: Partial<UserProfile>) => Promise<{ error: AuthError | null }>;
+  updateProfile: (updates: Partial<UserProfile>) => Promise<{ error: any | null }>;
+  resendVerification: () => Promise<{ error: AuthError | null }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
 
+    // Get initial session - same as your PWA
     const getInitialSession = async () => {
       try {
+        console.log('🔍 Checking session...');
         const { data: { session }, error } = await supabase.auth.getSession();
         
-        if (error) {
-          console.error('Error getting session:', error);
-        }
-        
         if (mounted) {
-          setSession(session);
-          setUser(session?.user ?? null);
-          
-          if (session?.user) {
-            await fetchUserProfile(session.user.id);
+          if (error) {
+            console.error('❌ Session error:', error);
+          } else {
+            console.log('📱 Session found:', !!session);
+            setSession(session);
+            setUser(session?.user ?? null);
+            
+            if (session?.user) {
+              await fetchUserProfile(session.user.id);
+            }
           }
           setLoading(false);
         }
       } catch (error) {
-        console.error('Error in getInitialSession:', error);
+        console.error('❌ Error getting session:', error);
         if (mounted) {
           setLoading(false);
         }
@@ -69,35 +69,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     getInitialSession();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (!mounted) return;
+    // Listen for auth changes - same as your PWA
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!mounted) return;
 
-        console.log('Auth state changed:', event, session?.user?.email);
-        
-        setSession(session);
-        setUser(session?.user ?? null);
-        
-        if (session?.user) {
-          await fetchUserProfile(session.user.id);
+      console.log('🔄 Auth state changed:', event, session?.user?.email);
+      
+      setSession(session);
+      setUser(session?.user ?? null);
+      
+      if (session?.user) {
+        await fetchUserProfile(session.user.id);
+      } else {
+        setProfile(null);
+      }
+      
+      setLoading(false);
+
+      // Handle PWA auth persistence for web
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        if (session) {
+          localStorage.setItem('supabase_auth_session', JSON.stringify(session));
         } else {
-          setProfile(null);
-        }
-        
-        setLoading(false);
-
-        // Store session securely
-        try {
-          if (session) {
-            await SecureStore.setItemAsync('supabase_session', JSON.stringify(session));
-          } else {
-            await SecureStore.deleteItemAsync('supabase_session');
-          }
-        } catch (error) {
-          console.log('Storage error (non-critical):', error);
+          localStorage.removeItem('supabase_auth_session');
+          localStorage.removeItem('userStats');
         }
       }
-    );
+    });
 
     return () => {
       mounted = false;
@@ -105,115 +105,155 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
+  // Use the same profile fetching as your PWA
   const fetchUserProfile = async (userId: string) => {
     try {
+      console.log('👤 Fetching profile for:', userId);
+      
       const { data, error } = await supabase
         .from('user_profiles')
         .select('*')
         .eq('id', userId)
         .single();
 
-      if (error) {
-        console.error('Error fetching user profile:', error);
+      if (error && error.code !== 'PGRST116') {
+        console.error('❌ Profile fetch error:', error);
         return;
       }
 
-      setProfile(data);
+      if (data) {
+        console.log('✅ Profile loaded:', data.email);
+        setProfile(data);
+      } else {
+        console.log('📝 No profile found, this should be handled by trigger');
+        // Don't create profile manually - let the database trigger handle it
+      }
     } catch (error) {
-      console.error('Error in fetchUserProfile:', error);
+      console.error('❌ Error in fetchUserProfile:', error);
     }
   };
 
+  // Same sign up as your PWA
   const signUp = async (email: string, password: string, fullName?: string) => {
     try {
-      const { error } = await supabase.auth.signUp({
+      console.log('📝 Signing up:', email);
+      
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
           data: {
-            full_name: fullName,
+            full_name: fullName || email.split('@')[0]
           },
-          emailRedirectTo: `https://ninet.io/auth/callback`
+          emailRedirectTo: `${process.env.EXPO_PUBLIC_SITE_URL}/auth/callback`
         }
       });
-      return { error };
+
+      if (error) {
+        console.error('❌ Sign up error:', error);
+        return { error };
+      }
+
+      console.log('✅ Sign up successful:', email);
+      return { error: null };
     } catch (error) {
+      console.error('❌ Sign up exception:', error);
       return { error: error as AuthError };
     }
   };
 
+  // Same sign in as your PWA
   const signIn = async (email: string, password: string) => {
     try {
+      console.log('🔐 Signing in:', email);
+      
       const { error } = await supabase.auth.signInWithPassword({
         email,
-        password,
+        password
       });
+
+      if (error) {
+        console.error('❌ Sign in error:', error);
+      } else {
+        console.log('✅ Sign in successful:', email);
+      }
+
       return { error };
     } catch (error) {
+      console.error('❌ Sign in exception:', error);
       return { error: error as AuthError };
     }
   };
 
-  const signInWithBiometric = async () => {
-    // Only available on native platforms
-    if (Platform.OS === 'web') {
-      return { error: { message: 'Biometric authentication not available on web' } as AuthError };
-    }
-
+  // Same Google sign in as your PWA
+  const signInWithGoogle = async () => {
     try {
-      const hasHardware = await LocalAuthentication.hasHardwareAsync();
-      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+      console.log('🔍 Google sign in...');
       
-      if (!hasHardware || !isEnrolled) {
-        return { error: { message: 'Biometric authentication not available' } as AuthError };
-      }
-
-      const storedCredentials = await SecureStore.getItemAsync('user_credentials');
-      if (!storedCredentials) {
-        return { error: { message: 'No stored credentials found' } as AuthError };
-      }
-
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Authenticate to access NineT',
-        disableDeviceFallback: false,
-      });
-
-      if (result.success) {
-        const { email, password } = JSON.parse(storedCredentials);
-        return await signIn(email, password);
+      if (Platform.OS === 'web') {
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: `${process.env.EXPO_PUBLIC_SITE_URL}/auth/callback`
+          }
+        });
+        
+        if (error) {
+          console.error('❌ Google auth error:', error);
+        } else {
+          console.log('✅ Google auth initiated');
+        }
+        
+        return { error };
       } else {
-        return { error: { message: 'Biometric authentication failed' } as AuthError };
+        Alert.alert(
+          'Coming Soon',
+          'Google sign-in for mobile is coming soon. Please use email/password for now.'
+        );
+        return { error: null };
       }
     } catch (error) {
+      console.error('❌ Google auth exception:', error);
       return { error: error as AuthError };
     }
   };
 
+  // Same sign out as your PWA
   const signOut = async () => {
     try {
+      console.log('👋 Signing out...');
+      
       const { error } = await supabase.auth.signOut();
+      
       if (!error) {
-        try {
-          await SecureStore.deleteItemAsync('supabase_session');
-          await SecureStore.deleteItemAsync('user_credentials');
-          await SecureStore.deleteItemAsync('user_stats');
-        } catch (storageError) {
-          console.log('Storage cleanup error (non-critical):', storageError);
+        setProfile(null);
+        
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          localStorage.removeItem('supabase_auth_session');
+          localStorage.removeItem('userStats');
         }
+        
+        console.log('✅ Sign out successful');
+      } else {
+        console.error('❌ Sign out error:', error);
       }
+      
       return { error };
     } catch (error) {
+      console.error('❌ Sign out exception:', error);
       return { error: error as AuthError };
     }
   };
 
   const updateProfile = async (updates: Partial<UserProfile>) => {
-    if (!user) return { error: { message: 'No user logged in' } as AuthError };
+    if (!user) {
+      return { error: new Error('No user logged in') };
+    }
 
     try {
       const { error } = await supabase
         .from('user_profiles')
-        .update(updates)
+        .update({ ...updates, updated_at: new Date().toISOString() })
         .eq('id', user.id);
 
       if (!error) {
@@ -222,26 +262,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       return { error };
     } catch (error) {
+      console.error('❌ Update profile error:', error);
+      return { error };
+    }
+  };
+
+  const resendVerification = async () => {
+    if (!user?.email) {
+      return { error: new Error('No user email found') as AuthError };
+    }
+
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: user.email,
+        options: {
+          emailRedirectTo: `${process.env.EXPO_PUBLIC_SITE_URL}/auth/callback`
+        }
+      });
+
+      return { error };
+    } catch (error) {
+      console.error('❌ Resend verification error:', error);
       return { error: error as AuthError };
     }
   };
 
-  const value: AuthContextType = {
+  const value = {
     user,
-    session,
     profile,
+    session,
     loading,
     signUp,
     signIn,
-    signInWithBiometric,
+    signInWithGoogle,
     signOut,
     updateProfile,
+    resendVerification
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-};
+}
 
-export const useAuth = (): AuthContextType => {
+export const useAuth = () => {
   const context = useContext(AuthContext);
   if (context === undefined) {
     throw new Error('useAuth must be used within an AuthProvider');
