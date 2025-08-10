@@ -1,350 +1,454 @@
-import React, { useState, useEffect } from 'react';
+// app/(tabs)/two.tsx - UPDATED VERSION WITH FOCUS RELOAD
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
-  StyleSheet,
-  FlatList,
   TouchableOpacity,
-  Image,
-  Linking,
   Alert,
+  StatusBar,
+  SafeAreaView,
   ActivityIndicator,
+  Platform
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
+import Constants from 'expo-constants';
+import { useFocusEffect } from 'expo-router'; // ← ADD THIS IMPORT
+import { useAuth } from '../../contexts/AuthContext';
+import SwipeableArticles from '../../components/SwipeableArticles';
+import UserProfileMenu from '../../components/UserProfileMenu';
+import { Article, UserStats } from '../../types/Article';
 
-import { useAuth } from '@/contexts/AuthContext';
-import { Article, apiClient } from '@/lib/api';
-import { supabase } from '@/lib/supabase';
-import * as SecureStore from 'expo-secure-store';
-
-export default function BookmarksScreen() {
-  const [bookmarkedArticles, setBookmarkedArticles] = useState<Article[]>([]);
-  const [loading, setLoading] = useState(true);
-  const { user } = useAuth();
-
-  useEffect(() => {
-    loadBookmarkedArticles();
-  }, [user]);
-
-  const loadBookmarkedArticles = async () => {
-    try {
-      setLoading(true);
-      
-      if (user) {
-        // Load from Supabase for authenticated users
-        const { data: userStats, error } = await supabase
-          .from('user_stats')
-          .select('article_id')
-          .eq('user_id', user.id)
-          .eq('action', 'bookmark');
-
-        if (error) throw error;
-
-        const articleIds = userStats.map(stat => stat.article_id);
-        
-        if (articleIds.length > 0) {
-          const { data: articles, error: articlesError } = await supabase
-            .from('articles')
-            .select('*')
-            .in('id', articleIds)
-            .order('published_at', { ascending: false });
-
-          if (articlesError) throw articlesError;
-          setBookmarkedArticles(articles || []);
-        } else {
-          setBookmarkedArticles([]);
+// Cross-platform storage helper
+const getStorage = () => {
+  if (Platform.OS === 'web') {
+    return {
+      getItem: async (key: string) => {
+        if (typeof window !== 'undefined') {
+          return window.localStorage.getItem(key);
         }
-      } else {
-        // Load from local storage for guests
-        const saved = await SecureStore.getItemAsync('userStats');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          const bookmarkedIds = parsed.bookmarkedArticles || [];
-          
-          // Fetch articles from API
-          const allArticles = await apiClient.fetchArticles();
-          const bookmarked = allArticles.filter(article => 
-            bookmarkedIds.includes(article.id)
-          );
-          setBookmarkedArticles(bookmarked);
+        return null;
+      },
+      setItem: async (key: string, value: string) => {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(key, value);
+        }
+      },
+      removeItem: async (key: string) => {
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem(key);
         }
       }
+    };
+  } else {
+    const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+    return AsyncStorage;
+  }
+};
+
+export default function SavedScreen() {
+  const [articles, setArticles] = useState<Article[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [userStats, setUserStats] = useState<UserStats>({
+    readArticles: new Set(),
+    bookmarkedArticles: new Set(),
+    readingTime: 0,
+    articlesReadToday: 0,
+    streak: 1
+  });
+
+  const { user, profile, signOut } = useAuth();
+
+  // Get API URL from multiple sources with fallback
+  const API_URL = Constants.expoConfig?.extra?.apiUrl || 
+                  Constants.manifest?.extra?.apiUrl ||
+                  process.env.EXPO_PUBLIC_API_URL || 
+                  'https://ai-news-api.skaybotlabs.workers.dev';
+
+  // REPLACE THE OLD useEffect WITH useFocusEffect
+  // This will reload data every time the tab becomes active
+  useFocusEffect(
+    useCallback(() => {
+      console.log('📚 Saved tab focused - reloading data...');
+      fetchArticles();
+      loadUserStats();
+    }, [])
+  );
+
+  const fetchArticles = useCallback(async () => {
+    try {
+      const timestamp = Date.now();
+      const apiUrl = `${API_URL}/api/articles?t=${timestamp}`;
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      
+      const headers = Platform.OS === 'web' 
+        ? { 'Accept': 'application/json' }
+        : {
+            'Cache-Control': 'no-cache',
+            'Accept': 'application/json',
+            'User-Agent': 'NineT-Mobile/1.0'
+          };
+      
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers,
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`API Error: ${response.status} - ${errorText}`);
+      }
+      
+      const data = await response.json();
+      
+      if (data.success && data.data && Array.isArray(data.data)) {
+        const articlesWithSource = data.data.map((article: Article) => ({
+          ...article,
+          source: article.source || article.original_url.split('/')[2]?.replace('www.', '') || 'AI News'
+        }));
+        setArticles(articlesWithSource);
+        console.log('📰 Articles loaded:', articlesWithSource.length);
+      } else if (data.success && (!data.data || data.data.length === 0)) {
+        setArticles([]);
+      } else {
+        throw new Error('Invalid response format from server');
+      }
     } catch (error) {
-      console.error('Error loading bookmarked articles:', error);
-      Alert.alert('Error', 'Failed to load bookmarked articles');
+      console.error('❌ Error fetching articles:', error);
+      
+      let errorMessage = 'Failed to load articles.';
+      if (error.name === 'AbortError') {
+        errorMessage = 'Request timed out. Please check your internet connection.';
+      } else if (error.message.includes('fetch')) {
+        errorMessage = 'Network error. Please check your internet connection.';
+      } else if (error.message.includes('API Error')) {
+        errorMessage = 'Server error. Please try again later.';
+      } else if (error.message.includes('Failed to fetch')) {
+        errorMessage = 'Network request failed. Please try again.';
+      }
+      
+      Alert.alert(
+        'Connection Error', 
+        errorMessage,
+        [
+          { text: 'Retry', onPress: () => fetchArticles() },
+          { text: 'Cancel' }
+        ]
+      );
     } finally {
       setLoading(false);
     }
-  };
+  }, [API_URL]);
 
-  const removeBookmark = async (articleId: string) => {
+  const loadUserStats = async () => {
     try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      
-      if (user) {
-        await supabase
-          .from('user_stats')
-          .delete()
-          .eq('user_id', user.id)
-          .eq('article_id', articleId)
-          .eq('action', 'bookmark');
-      } else {
-        // Update local storage
-        const saved = await SecureStore.getItemAsync('userStats');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          const bookmarkedIds = (parsed.bookmarkedArticles || []).filter((id: string) => id !== articleId);
-          parsed.bookmarkedArticles = bookmarkedIds;
-          await SecureStore.setItemAsync('userStats', JSON.stringify(parsed));
-        }
-      }
+      const storage = getStorage();
+      const savedStats = await storage.getItem(`userStats_${user?.id}`);
+      // ADD THIS DEBUG:
+      console.log('🔍 Raw saved stats:', savedStats);
 
-      setBookmarkedArticles(prev => prev.filter(article => article.id !== articleId));
+      if (savedStats) {
+        const parsed = JSON.parse(savedStats);
+        // ADD THIS DEBUG TOO:
+        console.log('🔍 Parsed bookmarks array:', parsed.bookmarkedArticles);
+
+        const newStats = {
+          ...parsed,
+          readArticles: new Set(parsed.readArticles || []),
+          bookmarkedArticles: new Set(parsed.bookmarkedArticles || [])
+        };
+        setUserStats(newStats);
+        console.log('🔖 Bookmarked articles loaded:', newStats.bookmarkedArticles.size);
+      } else {
+        console.log('📚 No saved stats found');
+      }
     } catch (error) {
-      console.error('Error removing bookmark:', error);
-      Alert.alert('Error', 'Failed to remove bookmark');
+      console.error('❌ Error loading user stats:', error);
     }
   };
 
-  const openArticle = (url: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Linking.openURL(url);
-  };
-
-  const getCategoryColor = (category: string) => {
-    const colors: { [key: string]: string } = {
-      'AI Models': '#3B82F6',
-      'Machine Learning': '#10B981',
-      'Research': '#8B5CF6',
-      'Policy': '#F59E0B',
-      'Industry': '#EF4444',
-      'Startups': '#06B6D4',
-      'AI Security': '#F97316',
-    };
-    return colors[category] || '#6B7280';
-  };
-
-  const renderArticleItem = ({ item }: { item: Article }) => (
-    <View style={styles.articleItem}>
-      {item.image_url && (
-        <Image source={{ uri: item.image_url }} style={styles.articleImage} />
-      )}
+  const saveUserStats = async (newStats: UserStats) => {
+    try {
+      const statsToSave = {
+        ...newStats,
+        readArticles: Array.from(newStats.readArticles),
+        bookmarkedArticles: Array.from(newStats.bookmarkedArticles)
+      };
       
-      <View style={styles.articleContent}>
-        <View style={styles.articleMeta}>
-          <View style={[styles.categoryBadge, { backgroundColor: getCategoryColor(item.category) }]}>
-            <Text style={styles.categoryText}>{item.category}</Text>
-          </View>
-          <Text style={styles.sourceText}>{item.source}</Text>
-        </View>
-        
-        <Text style={styles.articleTitle} numberOfLines={2}>
-          {item.title}
-        </Text>
-        
-        <Text style={styles.articleSummary} numberOfLines={3}>
-          {item.summary}
-        </Text>
-        
-        <View style={styles.actionButtons}>
-          <TouchableOpacity
-            style={styles.readButton}
-            onPress={() => openArticle(item.original_url)}
-          >
-            <Ionicons name="open-outline" size={16} color="#3B82F6" />
-            <Text style={styles.readButtonText}>Read</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={styles.removeButton}
-            onPress={() => removeBookmark(item.id)}
-          >
-            <Ionicons name="trash-outline" size={16} color="#EF4444" />
-            <Text style={styles.removeButtonText}>Remove</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </View>
+      const storage = getStorage();
+      await storage.setItem(`userStats_${user?.id}`, JSON.stringify(statsToSave));
+      
+      setUserStats(newStats);
+      console.log('💾 User stats saved, bookmarks:', newStats.bookmarkedArticles.size);
+    } catch (error) {
+      console.error('❌ Error saving user stats:', error);
+    }
+  };
+
+  const handleBookmark = (articleId: string) => {
+    console.log('🔖 Bookmark toggled for article:', articleId);
+    
+    const newBookmarks = new Set(userStats.bookmarkedArticles);
+    if (newBookmarks.has(articleId)) {
+      newBookmarks.delete(articleId);
+      console.log('❌ Bookmark removed');
+    } else {
+      newBookmarks.add(articleId);
+      console.log('✅ Bookmark added');
+    }
+
+    saveUserStats({
+      ...userStats,
+      bookmarkedArticles: newBookmarks
+    });
+  };
+
+  const handleMarkAsRead = (articleId: string) => {
+    const newReadArticles = new Set(userStats.readArticles);
+    newReadArticles.add(articleId);
+
+    const newStats = {
+      ...userStats,
+      readArticles: newReadArticles,
+      articlesReadToday: userStats.articlesReadToday + 1
+    };
+
+    saveUserStats(newStats);
+  };
+
+  const formatTimeAgo = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
+    
+    if (diffInHours < 1) return 'Just now';
+    if (diffInHours < 24) return `${diffInHours}h ago`;
+    const diffInDays = Math.floor(diffInHours / 24);
+    if (diffInDays < 7) return `${diffInDays}d ago`;
+    return date.toLocaleDateString();
+  };
+
+  // Filter to show only bookmarked articles
+  const bookmarkedArticles = articles.filter(article => 
+    userStats.bookmarkedArticles.has(article.id)
   );
+  
+  // ADD THIS DEBUG LINE:
+console.log('🔍 Debug - Bookmarked IDs:', Array.from(userStats.bookmarkedArticles), 'Found articles:', bookmarkedArticles.map(a => a.id), 'Found count:', bookmarkedArticles.length);
+
+  console.log('📊 Stats - Total articles:', articles.length, 'Bookmarked:', bookmarkedArticles.length);
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Saved Articles</Text>
-        </View>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#3B82F6" />
-          <Text style={styles.loadingText}>Loading saved articles...</Text>
-        </View>
+      <SafeAreaView style={{
+        flex: 1,
+        backgroundColor: '#000',
+        justifyContent: 'center',
+        alignItems: 'center'
+      }}>
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <ActivityIndicator size="large" color="#60A5FA" />
+        <Text style={{
+          color: 'white',
+          marginTop: 16,
+          fontSize: 16
+        }}>
+          Loading your saved articles...
+        </Text>
       </SafeAreaView>
     );
   }
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Saved Articles</Text>
-        <Text style={styles.headerSubtitle}>{bookmarkedArticles.length} articles</Text>
-      </View>
+  // Show empty state when no bookmarks
+  if (bookmarkedArticles.length === 0) {
+    return (
+      <SafeAreaView style={{
+        flex: 1,
+        backgroundColor: '#000',
+        justifyContent: 'center',
+        alignItems: 'center'
+      }}>
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
+        
+        {/* Header */}
+        <View style={{
+          position: 'absolute',
+          top: Platform.OS === 'ios' ? 50 : 30,
+          left: 0,
+          right: 0,
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          paddingHorizontal: 20,
+          zIndex: 1000
+        }}>
+          {/* Left - Empty space for balance */}
+          <View style={{ width: 44 }} />
 
-      {bookmarkedArticles.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Ionicons name="bookmark-outline" size={64} color="#374151" />
-          <Text style={styles.emptyTitle}>No saved articles yet</Text>
-          <Text style={styles.emptySubtitle}>
-            Bookmark articles from the news feed to read them later
+          {/* Center - App Name */}
+          <View style={{
+            backgroundColor: 'rgba(31, 41, 55, 0.9)',
+            paddingHorizontal: 16,
+            paddingVertical: 8,
+            borderRadius: 20,
+            alignItems: 'center'
+          }}>
+            <Text style={{
+              fontSize: 18,
+              fontWeight: 'bold',
+              color: 'white'
+            }}>
+              NineT
+            </Text>
+            <Text style={{
+              fontSize: 10,
+              color: '#9CA3AF'
+            }}>
+              AI Briefed by AI
+            </Text>
+          </View>
+
+          {/* Right - User Profile */}
+          <TouchableOpacity
+            onPress={() => setShowUserMenu(true)}
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 22,
+              backgroundColor: '#1D4ED8',
+              justifyContent: 'center',
+              alignItems: 'center'
+            }}
+          >
+            <Text style={{
+              color: 'white',
+              fontSize: 16,
+              fontWeight: 'bold'
+            }}>
+              {profile?.full_name?.[0] || user?.email?.[0] || 'U'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Empty State */}
+        <View style={{ alignItems: 'center', paddingHorizontal: 40 }}>
+          <Text style={{ fontSize: 60, marginBottom: 20 }}>📚</Text>
+          <Text style={{
+            color: 'white',
+            fontSize: 24,
+            fontWeight: 'bold',
+            textAlign: 'center',
+            marginBottom: 12
+          }}>
+            No Saved Articles Yet
+          </Text>
+          <Text style={{
+            color: '#9CA3AF',
+            fontSize: 16,
+            textAlign: 'center',
+            lineHeight: 24
+          }}>
+            Articles you bookmark from the News tab will appear here for easy access
           </Text>
         </View>
-      ) : (
-        <FlatList
-          data={bookmarkedArticles}
-          renderItem={renderArticleItem}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContainer}
-          showsVerticalScrollIndicator={false}
+
+        {/* User Profile Menu */}
+        <UserProfileMenu
+          visible={showUserMenu}
+          onClose={() => setShowUserMenu(false)}
+          user={user}
+          profile={profile}
+          onSignOut={signOut}
         />
-      )}
-    </SafeAreaView>
+      </SafeAreaView>
+    );
+  }
+  console.log('🎯 Passing to SwipeableArticles:', bookmarkedArticles.length, 'articles');
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#000' }}>
+      <SwipeableArticles
+        articles={bookmarkedArticles}
+        onBookmark={handleBookmark}
+        onMarkAsRead={handleMarkAsRead}
+        isBookmarked={(id) => userStats.bookmarkedArticles.has(id)}
+        isRead={(id) => userStats.readArticles.has(id)}
+        formatTimeAgo={formatTimeAgo}
+        viewMode="bookmarks"
+      />
+
+      {/* Header */}
+      <View style={{
+        position: 'absolute',
+        top: Platform.OS === 'ios' ? 50 : 30,
+        left: 0,
+        right: 0,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingHorizontal: 20,
+        zIndex: 1000
+      }}>
+        {/* Left - Empty space for balance */}
+        <View style={{ width: 44 }} />
+
+        {/* Center - App Name */}
+        <View style={{
+          backgroundColor: 'rgba(31, 41, 55, 0.9)',
+          paddingHorizontal: 16,
+          paddingVertical: 8,
+          borderRadius: 20,
+          alignItems: 'center'
+        }}>
+          <Text style={{
+            fontSize: 18,
+            fontWeight: 'bold',
+            color: 'white'
+          }}>
+            NineT
+          </Text>
+          <Text style={{
+            fontSize: 10,
+            color: '#9CA3AF'
+          }}>
+            AI Briefed by AI
+          </Text>
+        </View>
+
+        {/* Right - User Profile */}
+        <TouchableOpacity
+          onPress={() => setShowUserMenu(true)}
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: 22,
+            backgroundColor: '#1D4ED8',
+            justifyContent: 'center',
+            alignItems: 'center'
+          }}
+        >
+          <Text style={{
+            color: 'white',
+            fontSize: 16,
+            fontWeight: 'bold'
+          }}>
+            {profile?.full_name?.[0] || user?.email?.[0] || 'U'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* User Profile Menu */}
+      <UserProfileMenu
+        visible={showUserMenu}
+        onClose={() => setShowUserMenu(false)}
+        user={user}
+        profile={profile}
+        onSignOut={signOut}
+      />
+    </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-  header: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1F2937',
-  },
-  headerTitle: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  headerSubtitle: {
-    color: '#9CA3AF',
-    fontSize: 14,
-    marginTop: 4,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    color: '#9CA3AF',
-    fontSize: 16,
-    marginTop: 12,
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 32,
-  },
-  emptyTitle: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginTop: 16,
-    textAlign: 'center',
-  },
-  emptySubtitle: {
-    color: '#9CA3AF',
-    fontSize: 16,
-    marginTop: 8,
-    textAlign: 'center',
-    lineHeight: 24,
-  },
-  listContainer: {
-    padding: 16,
-  },
-  articleItem: {
-    backgroundColor: '#111827',
-    borderRadius: 12,
-    marginBottom: 16,
-    overflow: 'hidden',
-  },
-  articleImage: {
-    width: '100%',
-    height: 120,
-  },
-  articleContent: {
-    padding: 16,
-  },
-  articleMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  categoryBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    marginRight: 8,
-  },
-  categoryText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  sourceText: {
-    color: '#9CA3AF',
-    fontSize: 12,
-  },
-  articleTitle: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-    lineHeight: 22,
-    marginBottom: 8,
-  },
-  articleSummary: {
-    color: '#D1D5DB',
-    fontSize: 14,
-    lineHeight: 20,
-    marginBottom: 12,
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  readButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1F2937',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    flex: 1,
-    marginRight: 8,
-    justifyContent: 'center',
-  },
-  readButtonText: {
-    color: '#3B82F6',
-    fontSize: 14,
-    fontWeight: '600',
-    marginLeft: 4,
-  },
-  removeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1F2937',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    justifyContent: 'center',
-  },
-  removeButtonText: {
-    color: '#EF4444',
-    fontSize: 14,
-    fontWeight: '600',
-    marginLeft: 4,
-  },
-});

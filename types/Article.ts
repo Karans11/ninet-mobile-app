@@ -25,4 +25,5 @@ export interface UserStats {
 export interface UserPreferences {
   selectedCategories: string[];
   filterMode: 'all' | 'selected';
+  fontSize: 'small' | 'medium' | 'large';
 }

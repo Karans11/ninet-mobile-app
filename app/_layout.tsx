@@ -1,4 +1,4 @@
-// app/_layout.tsx - REPLACE COMPLETELY
+// app/_layout.tsx - ENABLE AUTHGUARD
 import { Stack } from 'expo-router';
 import { AuthProvider } from '../contexts/AuthContext';
 import AuthGuard from '../components/auth/AuthGuard';

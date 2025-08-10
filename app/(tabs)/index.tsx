@@ -1,22 +1,18 @@
-// app/(tabs)/index.tsx - FIXED ALL UI ISSUES
+// app/(tabs)/index.tsx - CLEAN NEWS TAB (ALL ARTICLES ONLY)
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
-  FlatList,
   TouchableOpacity,
-  RefreshControl,
   Alert,
   StatusBar,
   SafeAreaView,
   ActivityIndicator,
-  Platform,
-  Modal,
-  ScrollView
+  Platform
 } from 'react-native';
 import Constants from 'expo-constants';
+import { useFocusEffect } from 'expo-router'; // ADD THIS LINE
 import { useAuth } from '../../contexts/AuthContext';
-import ArticleCard from '../../components/ArticleCard';
 import SideMenu from '../../components/SideMenu';
 import SwipeableArticles from '../../components/SwipeableArticles';
 import UserProfileMenu from '../../components/UserProfileMenu';
@@ -64,13 +60,12 @@ const getStorage = () => {
   }
 };
 
-export default function HomeScreen() {
+export default function NewsScreen() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const [viewMode, setViewMode] = useState<'all' | 'bookmarks'>('all');
   const [userStats, setUserStats] = useState<UserStats>({
     readArticles: new Set(),
     bookmarkedArticles: new Set(),
@@ -78,12 +73,13 @@ export default function HomeScreen() {
     articlesReadToday: 0,
     streak: 1
   });
+  
   const [userPreferences, setUserPreferences] = useState<UserPreferences>({
     selectedCategories: [...AVAILABLE_CATEGORIES],
-    filterMode: 'all'
+    filterMode: 'all',
+    fontSize: 'medium'
   });
 
-  // User is guaranteed to exist because of AuthGuard
   const { user, profile, signOut } = useAuth();
 
   // Get API URL from multiple sources with fallback
@@ -98,7 +94,12 @@ export default function HomeScreen() {
     loadUserStats();
     loadUserPreferences();
   }, []);
-
+  // ADD THIS HOOK HERE:
+  useFocusEffect(
+  useCallback(() => {
+    loadUserStats();
+  }, [])
+);
   const fetchArticles = useCallback(async () => {
     try {
       const timestamp = Date.now();
@@ -106,15 +107,11 @@ export default function HomeScreen() {
       
       console.log('📰 Fetching articles from:', apiUrl);
       
-      // Add timeout and better error handling
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000);
       
-      // Platform-specific headers to avoid CORS issues on web
       const headers = Platform.OS === 'web' 
-        ? {
-            'Accept': 'application/json'
-          }
+        ? { 'Accept': 'application/json' }
         : {
             'Cache-Control': 'no-cache',
             'Accept': 'application/json',
@@ -128,16 +125,13 @@ export default function HomeScreen() {
       });
       
       clearTimeout(timeoutId);
-      console.log('📡 Response status:', response.status);
       
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('❌ API Error Response:', errorText);
         throw new Error(`API Error: ${response.status} - ${errorText}`);
       }
       
       const data = await response.json();
-      console.log('📊 Response data success:', data.success, 'data length:', data.data?.length);
       
       if (data.success && data.data && Array.isArray(data.data)) {
         const articlesWithSource = data.data.map((article: Article) => ({
@@ -145,18 +139,14 @@ export default function HomeScreen() {
           source: article.source || article.original_url.split('/')[2]?.replace('www.', '') || 'AI News'
         }));
         setArticles(articlesWithSource);
-        console.log('✅ Articles loaded successfully:', articlesWithSource.length);
       } else if (data.success && (!data.data || data.data.length === 0)) {
-        console.log('⚠️ No articles available');
         setArticles([]);
       } else {
-        console.error('❌ Invalid response format:', data);
         throw new Error('Invalid response format from server');
       }
     } catch (error) {
       console.error('❌ Error fetching articles:', error);
       
-      // More specific error messages
       let errorMessage = 'Failed to load articles.';
       if (error.name === 'AbortError') {
         errorMessage = 'Request timed out. Please check your internet connection.';
@@ -209,7 +199,11 @@ export default function HomeScreen() {
       const storage = getStorage();
       const savedPrefs = await storage.getItem(`userPreferences_${user?.id}`);
       if (savedPrefs) {
-        setUserPreferences(JSON.parse(savedPrefs));
+        const loadedPrefs = JSON.parse(savedPrefs);
+        setUserPreferences({
+          ...loadedPrefs,
+          fontSize: 'medium'
+        });
       }
     } catch (error) {
       console.error('❌ Error loading user preferences:', error);
@@ -236,8 +230,12 @@ export default function HomeScreen() {
   const saveUserPreferences = async (newPrefs: UserPreferences) => {
     try {
       const storage = getStorage();
-      await storage.setItem(`userPreferences_${user?.id}`, JSON.stringify(newPrefs));
-      setUserPreferences(newPrefs);
+      const prefsToSave = {
+        ...newPrefs,
+        fontSize: 'medium' as const
+      };
+      await storage.setItem(`userPreferences_${user?.id}`, JSON.stringify(prefsToSave));
+      setUserPreferences(prefsToSave);
     } catch (error) {
       console.error('❌ Error saving user preferences:', error);
     }
@@ -282,16 +280,11 @@ export default function HomeScreen() {
     return date.toLocaleDateString();
   };
 
-  // Filter articles based on preferences
+  // Filter articles based on category preferences only
   const filteredArticles = articles.filter(article => {
-    if (viewMode === 'bookmarks') {
-      return userStats.bookmarkedArticles.has(article.id);
-    }
-    
     if (userPreferences.filterMode === 'selected') {
       return userPreferences.selectedCategories.includes(article.category);
     }
-    
     return true;
   });
 
@@ -316,7 +309,6 @@ export default function HomeScreen() {
     );
   }
 
-  // FIXED: Always render Swipe View (mobile-first, no toggle)
   return (
     <View style={{ flex: 1, backgroundColor: '#000' }}>
       <SwipeableArticles
@@ -326,9 +318,10 @@ export default function HomeScreen() {
         isBookmarked={(id) => userStats.bookmarkedArticles.has(id)}
         isRead={(id) => userStats.readArticles.has(id)}
         formatTimeAgo={formatTimeAgo}
+        viewMode="all"
       />
 
-      {/* FIXED: Clean Header for Swipe View - No Grey Blocks */}
+      {/* Header */}
       <View style={{
         position: 'absolute',
         top: Platform.OS === 'ios' ? 50 : 30,
@@ -400,7 +393,7 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Side Menu - Hamburger */}
+      {/* Side Menu - Categories and preferences only */}
       <SideMenu
         visible={showMenu}
         onClose={() => setShowMenu(false)}
@@ -409,10 +402,7 @@ export default function HomeScreen() {
         userStats={userStats}
         userPreferences={userPreferences}
         availableCategories={AVAILABLE_CATEGORIES}
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
         onPreferencesChange={saveUserPreferences}
-        onSignOut={signOut}
       />
 
       {/* User Profile Menu */}

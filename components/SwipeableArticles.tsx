@@ -1,4 +1,4 @@
-// components/SwipeableArticles.tsx - IMPROVED SMOOTH EXPERIENCE
+// components/SwipeableArticles.tsx - CLEAN REWRITE
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
@@ -9,7 +9,6 @@ import {
   Animated,
   PanResponder,
   StatusBar,
-  SafeAreaView,
   Linking,
   Platform,
   Share,
@@ -27,180 +26,144 @@ interface SwipeableArticlesProps {
   isBookmarked: (articleId: string) => boolean;
   isRead: (articleId: string) => boolean;
   formatTimeAgo: (dateString: string) => string;
+  viewMode?: 'all' | 'bookmarks';
 }
 
 const SwipeableArticles: React.FC<SwipeableArticlesProps> = ({
-  articles,
+  articles = [],
   onBookmark,
   onMarkAsRead,
   isBookmarked,
   isRead,
-  formatTimeAgo
+  formatTimeAgo,
+  viewMode = 'all'
 }) => {
+  // State - minimal and clean
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [scrollY, setScrollY] = useState(0);
+  
+  // Refs for performance
   const currentIndexRef = useRef(0);
   const scrollViewRef = useRef<ScrollView>(null);
-  const translateY = useRef(new Animated.Value(0)).current;
-  const [hasReadCurrentArticle, setHasReadCurrentArticle] = useState(false);
+  const articlesRef = useRef(articles);
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
 
-  // Keep ref in sync with state
+  // Constants
+  const fontSizes = {
+    title: SCREEN_HEIGHT > 700 ? 26 : 22,
+    titleLineHeight: SCREEN_HEIGHT > 700 ? 34 : 28,
+    summary: 15,
+    summaryLineHeight: 22,
+    bottomPadding: 250
+  };
+
+  // MINIMAL useEffects - only essential syncing
+  useEffect(() => {
+    articlesRef.current = articles;
+  }, [articles]);
+
   useEffect(() => {
     currentIndexRef.current = currentIndex;
-    setHasReadCurrentArticle(false); // Reset read state for new article
-    console.log('📊 Current index updated to:', currentIndex);
+    // Reset scroll when article changes
+    if (scrollViewRef.current) {
+      scrollViewRef.current.scrollTo({ y: 0, animated: false });
+    }
   }, [currentIndex]);
 
-  // FIXED: Mark as read when user views article for a few seconds
-  useEffect(() => {
-    if (articles[currentIndex] && !hasReadCurrentArticle) {
-      const timer = setTimeout(() => {
-        console.log('👁️ User has read the summarized article');
-        onMarkAsRead(articles[currentIndex].id);
-        setHasReadCurrentArticle(true);
-      }, 3000); // Mark as read after 3 seconds of viewing
-
-      return () => clearTimeout(timer);
-    }
-  }, [currentIndex, articles, onMarkAsRead, hasReadCurrentArticle]);
-
-  // Reset when articles change
+  // Reset index when switching view modes
   useEffect(() => {
     setCurrentIndex(0);
-    currentIndexRef.current = 0;
-    setHasReadCurrentArticle(false);
-    console.log('🔄 Articles changed, reset to index 0');
-  }, [articles.length]);
+  }, [viewMode]);
 
-  // IMPROVED: Much smoother animations
-  const animateToNext = useCallback(() => {
-    Animated.timing(translateY, {
-      toValue: -SCREEN_HEIGHT,
-      duration: 300,
-      useNativeDriver: true,
-    }).start(() => {
-      translateY.setValue(0);
-    });
-  }, [translateY]);
-
-  const animateToPrevious = useCallback(() => {
-    Animated.timing(translateY, {
-      toValue: SCREEN_HEIGHT,
-      duration: 300,
-      useNativeDriver: true,
-    }).start(() => {
-      translateY.setValue(0);
-    });
-  }, [translateY]);
-
-  const animateReturn = useCallback(() => {
-    Animated.spring(translateY, {
-      toValue: 0,
-      tension: 300,
-      friction: 25,
-      useNativeDriver: true,
-    }).start();
-  }, [translateY]);
-
+  // Clean navigation functions
   const goToNext = useCallback(() => {
     const currentIdx = currentIndexRef.current;
-    if (currentIdx < articles.length - 1) {
-      const newIndex = currentIdx + 1;
-      console.log(`⬆️ SWIPE UP: Going from article ${currentIdx + 1} to ${newIndex + 1}`);
-      animateToNext();
-      setCurrentIndex(newIndex);
-    } else {
-      console.log('🔚 Already at last article');
-      animateReturn();
+    const totalArticles = articlesRef.current.length;
+    
+    if (currentIdx < totalArticles - 1) {
+      setCurrentIndex(currentIdx + 1);
     }
-  }, [articles, animateToNext, animateReturn]);
+  }, []);
 
   const goToPrevious = useCallback(() => {
     const currentIdx = currentIndexRef.current;
+    
     if (currentIdx > 0) {
-      const newIndex = currentIdx - 1;
-      console.log(`⬇️ SWIPE DOWN: Going from article ${currentIdx + 1} to ${newIndex + 1}`);
-      animateToPrevious();
-      setCurrentIndex(newIndex);
-    } else {
-      console.log('🔚 Already at first article');
-      animateReturn();
+      setCurrentIndex(currentIdx - 1);
     }
-  }, [animateToPrevious, animateReturn]);
+  }, []);
 
-  // IMPROVED: Much more responsive and smooth pan responder
+  // Clean gesture handling
   const panResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, gestureState) => {
-        const { dx, dy } = gestureState;
-        // More sensitive - start detecting at 5px
-        const verticalMovement = Math.abs(dy);
-        const horizontalMovement = Math.abs(dx);
-        const isVerticalSwipe = verticalMovement > 5 && verticalMovement > horizontalMovement * 0.8;
+        const { dx, dy, vy } = gestureState;
+        const totalArticles = articlesRef.current.length;
         
-        return isVerticalSwipe;
+        if (totalArticles <= 1) return false;
+        
+        const isVerticalSwipe = Math.abs(dy) > Math.abs(dx) * 2;
+        const isFastSwipe = Math.abs(vy) > 1.5;
+        const isLargeMovement = Math.abs(dy) > 80;
+        
+        // Next article (swipe up)
+        if (dy < -60 && isVerticalSwipe && (isFastSwipe || isLargeMovement)) {
+          return true;
+        }
+        
+        // Previous article (swipe down) - only at top of scroll
+        if (dy > 60 && scrollY < 10 && isVerticalSwipe && (isFastSwipe || isLargeMovement)) {
+          return true;
+        }
+        
+        return false;
       },
       onPanResponderGrant: () => {
-        translateY.setOffset(translateY._value);
-        translateY.setValue(0);
-      },
-      onPanResponderMove: (_, gestureState) => {
-        // IMPROVED: More responsive visual feedback with resistance at edges
-        const currentIdx = currentIndexRef.current;
-        let dampening = 0.5;
-        
-        // Add resistance at edges
-        if (gestureState.dy > 0 && currentIdx === 0) {
-          dampening = 0.2; // More resistance when at first article swiping down
-        } else if (gestureState.dy < 0 && currentIdx === articles.length - 1) {
-          dampening = 0.2; // More resistance when at last article swiping up
-        }
-        
-        const movement = gestureState.dy * dampening;
-        translateY.setValue(movement);
+        Animated.timing(scaleAnim, {
+          toValue: 0.98,
+          duration: 100,
+          useNativeDriver: true,
+        }).start();
       },
       onPanResponderRelease: (_, gestureState) => {
-        translateY.flattenOffset();
-        
-        // IMPROVED: Lower thresholds for more responsive swiping
+        Animated.timing(scaleAnim, {
+          toValue: 1,
+          duration: 100,
+          useNativeDriver: true,
+        }).start();
+
         const { dy, vy } = gestureState;
         const currentIdx = currentIndexRef.current;
+        const totalArticles = articlesRef.current.length;
         
-        console.log('🔄 Swipe gesture:', { 
-          dy: dy.toFixed(1), 
-          vy: vy.toFixed(2), 
-          direction: dy > 0 ? 'DOWN ⬇️' : 'UP ⬆️',
-          currentIndex: currentIdx
-        });
-        
-        // IMPROVED: More sensitive thresholds
-        // SWIPE UP (negative dy) = Next article
-        if (dy < -50 || vy < -0.3) {
-          console.log('⬆️ SWIPE UP - Next article');
+        // Next article
+        if ((dy < -100 || vy < -2.0) && currentIdx < totalArticles - 1) {
           goToNext();
         }
-        // SWIPE DOWN (positive dy) = Previous article  
-        else if (dy > 50 || vy > 0.3) {
-          console.log('⬇️ SWIPE DOWN - Previous article');
+        // Previous article
+        else if ((dy > 100 || vy > 2.0) && scrollY < 5 && currentIdx > 0) {
           goToPrevious();
         }
-        // Not enough movement - snap back
-        else {
-          console.log('↩️ Snapping back');
-          animateReturn();
-        }
       },
+      onPanResponderTerminate: () => {
+        Animated.timing(scaleAnim, {
+          toValue: 1,
+          duration: 100,
+          useNativeDriver: true,
+        }).start();
+      },
+      onPanResponderTerminationRequest: () => true,
     })
   ).current;
 
-  // Article click opens full article AND marks as read
+  // Action handlers
   const handleArticlePress = async (url: string) => {
     try {
       const supported = await Linking.canOpenURL(url);
       if (supported) {
         await Linking.openURL(url);
-        // Mark as read when user opens full article
         onMarkAsRead(currentArticle.id);
-        setHasReadCurrentArticle(true);
       } else {
         Alert.alert('Error', 'Cannot open article');
       }
@@ -210,7 +173,6 @@ const SwipeableArticles: React.FC<SwipeableArticlesProps> = ({
     }
   };
 
-  // Share function
   const handleShare = async () => {
     try {
       const article = currentArticle;
@@ -232,11 +194,28 @@ const SwipeableArticles: React.FC<SwipeableArticlesProps> = ({
     }
   };
 
+  const handleScroll = (event: any) => {
+    const { contentOffset } = event.nativeEvent;
+    setScrollY(contentOffset.y);
+  };
+
+  // Get current article
   const currentArticle = articles[currentIndex];
+
+  // Loading states
+  if (!articles || articles.length === 0) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }}>
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <Text style={{ color: 'white', fontSize: 16 }}>Loading articles...</Text>
+      </View>
+    );
+  }
 
   if (!currentArticle) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }}>
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
         <Text style={{ color: 'white' }}>No articles available</Text>
       </View>
     );
@@ -246,176 +225,193 @@ const SwipeableArticles: React.FC<SwipeableArticlesProps> = ({
     <View style={{ flex: 1, backgroundColor: '#000' }}>
       <StatusBar barStyle="light-content" backgroundColor="#000" />
 
-      {/* IMPROVED: Full screen swipeable content with smooth animations */}
-      <Animated.View
-        style={{
-          flex: 1,
-          transform: [{ translateY }]
-        }}
-        {...panResponder.panHandlers}
-      >
-        {/* Article content - clickable to open full article */}
-        <TouchableOpacity
+      <Animated.View style={{
+        flex: 1,
+        opacity: fadeAnim,
+        transform: [{ scale: scaleAnim }]
+      }}>
+        <View 
           style={{ flex: 1 }}
-          activeOpacity={0.95}
-          onPress={() => handleArticlePress(currentArticle.original_url)}
+          {...panResponder.panHandlers}
         >
-          <ScrollView
+          <TouchableOpacity
             style={{ flex: 1 }}
-            contentContainerStyle={{
-              paddingHorizontal: 20,
-              paddingTop: Platform.OS === 'ios' ? 110 : 90,
-              paddingBottom: 40, // FIXED: Back to normal padding
-              justifyContent: 'center',
-              minHeight: SCREEN_HEIGHT - 140
-            }}
-            showsVerticalScrollIndicator={false}
+            activeOpacity={0.95}
+            onPress={() => handleArticlePress(currentArticle.original_url)}
           >
-            {/* Article Content */}
-            <View style={{
-              flex: 1,
-              justifyContent: 'center'
-            }}>
-              
-              {/* Category Badge */}
-              <View style={{
-                alignSelf: 'flex-start',
-                backgroundColor: getCategoryColor(currentArticle.category),
-                paddingHorizontal: 12,
-                paddingVertical: 6,
-                borderRadius: 20,
-                marginBottom: 16
-              }}>
+            <ScrollView
+              ref={scrollViewRef}
+              style={{ flex: 1 }}
+              contentContainerStyle={{
+                paddingHorizontal: 20,
+                paddingTop: Platform.OS === 'ios' ? 140 : 120,
+                paddingBottom: fontSizes.bottomPadding,
+              }}
+              showsVerticalScrollIndicator={false}
+              onScroll={handleScroll}
+              scrollEventThrottle={16}
+              bounces={true}
+            >
+              <View>
+                {/* Category Badge */}
+                <View style={{
+                  alignSelf: 'flex-start',
+                  backgroundColor: getCategoryColor(currentArticle.category),
+                  paddingHorizontal: 12,
+                  paddingVertical: 6,
+                  borderRadius: 20,
+                  marginBottom: 16
+                }}>
+                  <Text style={{
+                    color: 'white',
+                    fontSize: 12,
+                    fontWeight: '600'
+                  }}>
+                    {currentArticle.category}
+                  </Text>
+                </View>
+
+                {/* Article Title */}
                 <Text style={{
                   color: 'white',
-                  fontSize: 12,
-                  fontWeight: '600'
+                  fontSize: fontSizes.title,
+                  fontWeight: 'bold',
+                  lineHeight: fontSizes.titleLineHeight,
+                  marginBottom: 16
                 }}>
-                  {currentArticle.category}
+                  {currentArticle.title}
                 </Text>
-              </View>
 
-              {/* Article Title */}
-              <Text style={{
-                color: 'white',
-                fontSize: SCREEN_HEIGHT > 700 ? 26 : 22,
-                fontWeight: 'bold',
-                lineHeight: SCREEN_HEIGHT > 700 ? 34 : 28,
-                marginBottom: 16
-              }}>
-                {currentArticle.title}
-              </Text>
+                {/* Article Summary */}
+                <Text style={{
+                  color: '#D1D5DB',
+                  fontSize: fontSizes.summary,
+                  lineHeight: fontSizes.summaryLineHeight,
+                  marginBottom: 24
+                }}>
+                  {currentArticle.summary}
+                </Text>
 
-              {/* Article Summary */}
-              <Text style={{
-                color: '#D1D5DB',
-                fontSize: 15,
-                lineHeight: 22,
-                marginBottom: 24
-              }}>
-                {currentArticle.summary}
-              </Text>
-
-              {/* FIXED: Meta Information - Consistent read indicator */}
-              <View style={{
-                flexDirection: 'row',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: 32
-              }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: '#9CA3AF', fontSize: 13 }}>
-                    {currentArticle.source}
-                  </Text>
-                  <Text style={{ color: '#9CA3AF', fontSize: 11 }}>
-                    {formatTimeAgo(currentArticle.published_at)}
-                  </Text>
+                {/* Meta Information */}
+                <View style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: 32
+                }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: '#9CA3AF', fontSize: 13 }}>
+                      {currentArticle.source}
+                    </Text>
+                    <Text style={{ color: '#9CA3AF', fontSize: 11 }}>
+                      {formatTimeAgo(currentArticle.published_at)}
+                    </Text>
+                  </View>
+                  
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    {isRead(currentArticle.id) && (
+                      <>
+                        <View style={{
+                          backgroundColor: '#10B981',
+                          width: 8,
+                          height: 8,
+                          borderRadius: 4,
+                          marginRight: 4
+                        }} />
+                        <Text style={{ color: '#10B981', fontSize: 11 }}>
+                          Read
+                        </Text>
+                      </>
+                    )}
+                  </View>
                 </View>
-                
-                {/* FIXED: Consistent read indicator */}
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  {(isRead(currentArticle.id) || hasReadCurrentArticle) && (
-                    <>
-                      <View style={{
-                        backgroundColor: '#10B981',
-                        width: 8,
-                        height: 8,
-                        borderRadius: 4,
-                        marginRight: 4
-                      }} />
-                      <Text style={{ color: '#10B981', fontSize: 11 }}>
-                        Read
-                      </Text>
-                    </>
-                  )}
+
+                {/* Action Buttons */}
+                <View style={{
+                  flexDirection: 'row',
+                  gap: 12,
+                  marginBottom: 40
+                }}>
+                  <TouchableOpacity
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      onBookmark(currentArticle.id);
+                    }}
+                    style={{
+                      flex: 1,
+                      backgroundColor: isBookmarked(currentArticle.id) ? '#F59E0B' : '#374151',
+                      paddingVertical: 14,
+                      borderRadius: 12,
+                      alignItems: 'center'
+                    }}
+                  >
+                    <Text style={{
+                      color: 'white',
+                      fontSize: 15,
+                      fontWeight: '600'
+                    }}>
+                      {isBookmarked(currentArticle.id) ? '💾 Saved' : '🏷️ Save'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      handleShare();
+                    }}
+                    style={{
+                      flex: 1,
+                      backgroundColor: '#1D4ED8',
+                      paddingVertical: 14,
+                      borderRadius: 12,
+                      alignItems: 'center'
+                    }}
+                  >
+                    <Text style={{
+                      color: 'white',
+                      fontSize: 15,
+                      fontWeight: '600'
+                    }}>
+                      🚀 Share
+                    </Text>
+                  </TouchableOpacity>
                 </View>
-              </View>
 
-              {/* FIXED: Action Buttons - Back in content flow (not fixed) */}
-              <View style={{
-                flexDirection: 'row',
-                gap: 12,
-                marginBottom: 20
-              }}>
-                {/* Modern Bookmark Button */}
-                <TouchableOpacity
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    onBookmark(currentArticle.id);
-                  }}
-                  style={{
-                    flex: 1,
-                    backgroundColor: isBookmarked(currentArticle.id) ? '#F59E0B' : '#374151',
-                    paddingVertical: 14,
-                    borderRadius: 12,
-                    alignItems: 'center'
-                  }}
-                >
-                  <Text style={{
-                    color: 'white',
-                    fontSize: 15,
-                    fontWeight: '600'
+                {/* Navigation hints */}
+                {articles.length === 1 && (
+                  <View style={{
+                    alignItems: 'center',
+                    marginBottom: 20,
+                    paddingHorizontal: 20
                   }}>
-                    {isBookmarked(currentArticle.id) ? '💾 Saved' : '🏷️ Save'}
-                  </Text>
-                </TouchableOpacity>
+                    <Text style={{
+                      color: '#6B7280',
+                      fontSize: 12,
+                      textAlign: 'center'
+                    }}>
+                      📝 This is your only {viewMode === 'bookmarks' ? 'bookmarked' : ''} article
+                    </Text>
+                  </View>
+                )}
 
-                {/* Modern Share Button */}
-                <TouchableOpacity
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    handleShare();
-                  }}
-                  style={{
-                    flex: 1,
-                    backgroundColor: '#1D4ED8',
-                    paddingVertical: 14,
-                    borderRadius: 12,
-                    alignItems: 'center'
-                  }}
-                >
-                  <Text style={{
-                    color: 'white',
-                    fontSize: 15,
-                    fontWeight: '600'
+                {articles.length > 1 && (
+                  <View style={{
+                    alignItems: 'center',
+                    marginBottom: 20
                   }}>
-                    🚀 Share
-                  </Text>
-                </TouchableOpacity>
+                    <Text style={{
+                      color: '#4B5563',
+                      fontSize: 11,
+                      textAlign: 'center'
+                    }}>
+                      Article {currentIndex + 1} of {articles.length} • Swipe to navigate
+                    </Text>
+                  </View>
+                )}
               </View>
-
-              {/* Subtle swipe hint */}
-              <Text style={{
-                color: '#4B5563',
-                fontSize: 11,
-                textAlign: 'center',
-                marginTop: 10
-              }}>
-                Swipe ↕️ to navigate
-              </Text>
-            </View>
-          </ScrollView>
-        </TouchableOpacity>
+            </ScrollView>
+          </TouchableOpacity>
+        </View>
       </Animated.View>
     </View>
   );

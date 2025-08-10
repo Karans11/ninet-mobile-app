@@ -1,4 +1,4 @@
-// components/SideMenu.tsx - FIXED VERSION WITH PROPER SCREEN FITTING
+// components/SideMenu.tsx - CLEAN VERSION WITHOUT VIEW MODE TOGGLE
 import React, { useState } from 'react';
 import {
   View,
@@ -24,10 +24,7 @@ interface SideMenuProps {
   userStats: UserStats;
   userPreferences: UserPreferences;
   availableCategories: string[];
-  viewMode: 'all' | 'bookmarks';
-  onViewModeChange: (mode: 'all' | 'bookmarks') => void;
   onPreferencesChange: (preferences: UserPreferences) => void;
-  onSignOut: () => void;
 }
 
 const SideMenu: React.FC<SideMenuProps> = ({
@@ -38,10 +35,7 @@ const SideMenu: React.FC<SideMenuProps> = ({
   userStats,
   userPreferences,
   availableCategories,
-  viewMode,
-  onViewModeChange,
-  onPreferencesChange,
-  onSignOut
+  onPreferencesChange
 }) => {
   const [showCategories, setShowCategories] = useState(false);
 
@@ -223,72 +217,19 @@ const SideMenu: React.FC<SideMenuProps> = ({
                 </View>
               </View>
 
-              {/* View Mode Toggle */}
-              <View style={{ padding: 20 }}>
-                <Text style={{
-                  color: 'white',
-                  fontSize: 18,
-                  fontWeight: '600',
-                  marginBottom: 16
-                }}>
-                  View Mode
-                </Text>
-                
-                <View style={{
-                  flexDirection: 'row',
-                  backgroundColor: '#374151',
-                  borderRadius: 8,
-                  padding: 4
-                }}>
-                  <TouchableOpacity
-                    onPress={() => onViewModeChange('all')}
-                    style={{
-                      flex: 1,
-                      paddingVertical: 12,
-                      alignItems: 'center',
-                      backgroundColor: viewMode === 'all' ? '#1D4ED8' : 'transparent',
-                      borderRadius: 6
-                    }}
-                  >
-                    <Text style={{
-                      color: 'white',
-                      fontSize: 14,
-                      fontWeight: viewMode === 'all' ? '600' : '400'
-                    }}>
-                      All Articles
-                    </Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity
-                    onPress={() => onViewModeChange('bookmarks')}
-                    style={{
-                      flex: 1,
-                      paddingVertical: 12,
-                      alignItems: 'center',
-                      backgroundColor: viewMode === 'bookmarks' ? '#1D4ED8' : 'transparent',
-                      borderRadius: 6
-                    }}
-                  >
-                    <Text style={{
-                      color: 'white',
-                      fontSize: 14,
-                      fontWeight: viewMode === 'bookmarks' ? '600' : '400'
-                    }}>
-                      Bookmarks
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
               {/* Categories Filter */}
-              <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
+              <View style={{ 
+                padding: 20, 
+                borderBottomWidth: 1, 
+                borderBottomColor: '#374151' 
+              }}>
                 <TouchableOpacity
                   onPress={() => setShowCategories(!showCategories)}
                   style={{
                     flexDirection: 'row',
                     justifyContent: 'space-between',
                     alignItems: 'center',
-                    marginBottom: 16
+                    marginBottom: showCategories ? 16 : 0
                   }}
                 >
                   <Text style={{

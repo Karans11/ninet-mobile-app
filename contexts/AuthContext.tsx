@@ -1,4 +1,4 @@
-// contexts/AuthContext.tsx - REPLACE COMPLETELY
+// contexts/AuthContext.tsx - COMPLETE FILE RESTORED
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Alert, Platform } from 'react-native';
 import { Session, User, AuthError } from '@supabase/supabase-js';
@@ -133,7 +133,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Same sign up as your PWA
+  // UPDATED: Sign up with your hosted confirmation page
   const signUp = async (email: string, password: string, fullName?: string) => {
     try {
       console.log('📝 Signing up:', email);
@@ -145,13 +145,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           data: {
             full_name: fullName || email.split('@')[0]
           },
-          emailRedirectTo: `${process.env.EXPO_PUBLIC_SITE_URL}/auth/callback`
+          emailRedirectTo: 'https://auth.ninet.io/confirm'
         }
       });
 
       if (error) {
         console.error('❌ Sign up error:', error);
         return { error };
+      }
+
+      if (data?.user && !data?.user?.email_confirmed_at) {
+        Alert.alert(
+          'Check Your Email',
+          `We sent a verification link to ${email}. Please check your email and click the link to verify your account.\n\nAfter verification, return to the app to sign in.`,
+          [{ text: 'OK' }]
+        );
       }
 
       console.log('✅ Sign up successful:', email);
@@ -267,6 +275,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // UPDATED: Resend verification with your hosted page
   const resendVerification = async () => {
     if (!user?.email) {
       return { error: new Error('No user email found') as AuthError };
@@ -277,9 +286,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         type: 'signup',
         email: user.email,
         options: {
-          emailRedirectTo: `${process.env.EXPO_PUBLIC_SITE_URL}/auth/callback`
+          emailRedirectTo: 'https://auth.ninet.io/confirm'
         }
       });
+
+      if (!error) {
+        Alert.alert(
+          'Verification Email Sent',
+          `We sent a new verification link to ${user.email}. Please check your email and click the link to verify.`,
+          [{ text: 'OK' }]
+        );
+      }
 
       return { error };
     } catch (error) {
