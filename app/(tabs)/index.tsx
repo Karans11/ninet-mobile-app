@@ -24,13 +24,10 @@ const AVAILABLE_CATEGORIES = [
   'Machine Learning',
   'Policy',
   'Research',
-  'Industry News',
+  'Industry',
   'Startups',
   'AI Security',
-  'AI Tools',
-  'Computer Vision',
-  'Natural Language Processing',
-  'Robotics'
+  'AI Tools'
 ];
 
 // Cross-platform storage helper

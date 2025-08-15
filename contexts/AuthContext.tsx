@@ -1,8 +1,18 @@
-// contexts/AuthContext.tsx - COMPLETE FILE RESTORED
+// contexts/AuthContext.tsx - COMPLETE UPDATED FILE
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Alert, Platform } from 'react-native';
 import { Session, User, AuthError } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+// ADD these imports for Google OAuth
+import * as WebBrowser from 'expo-web-browser';
+import * as Linking from 'expo-linking';
+
+// ADD this configuration for OAuth
+WebBrowser.maybeCompleteAuthSession();
+
+// Worker URLs - UPDATE these with your actual worker URLs
+const API_WORKER_URL = 'https://ai-news-api.skaybotlabs.workers.dev'; // Your existing API worker
+const AUTH_WORKER_URL = 'https://ninet-auth.royal-sun-7194.workers.dev';   // Your new auth worker
 
 // Use the same interface as your PWA
 interface UserProfile {
@@ -105,6 +115,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // ADD this useEffect for deep link handling
+  useEffect(() => {
+    const handleDeepLink = (url: string) => {
+      const parsedUrl = Linking.parse(url);
+      
+      // Handle OAuth callback
+      if (parsedUrl.path?.includes('auth/success') || parsedUrl.path?.includes('auth/confirmed') || parsedUrl.path?.includes('auth/callback')) {
+        console.log('🔗 Auth success deep link received');
+        // Refresh session to get the latest auth state
+        supabase.auth.getSession();
+      }
+    };
+
+    const subscription = Linking.addEventListener('url', ({ url }) => {
+      handleDeepLink(url);
+    });
+
+    // Handle initial URL if app was opened from a deep link
+    Linking.getInitialURL().then((url) => {
+      if (url) {
+        handleDeepLink(url);
+      }
+    });
+
+    return () => {
+      subscription?.remove();
+    };
+  }, []);
+
   // Use the same profile fetching as your PWA
   const fetchUserProfile = async (userId: string) => {
     try {
@@ -133,7 +172,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // UPDATED: Sign up with your hosted confirmation page
+  // UPDATED: Sign up with auth worker for email confirmation
   const signUp = async (email: string, password: string, fullName?: string) => {
     try {
       console.log('📝 Signing up:', email);
@@ -145,7 +184,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           data: {
             full_name: fullName || email.split('@')[0]
           },
-          emailRedirectTo: 'https://auth.ninet.io/confirm'
+          emailRedirectTo: `${AUTH_WORKER_URL}/auth/confirm`
         }
       });
 
@@ -193,38 +232,66 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Same Google sign in as your PWA
-  const signInWithGoogle = async () => {
-    try {
-      console.log('🔍 Google sign in...');
+  // FIXED: Google sign in using auth worker for both web and mobile
+  // UPDATED: signInWithGoogle function in AuthContext.tsx
+const signInWithGoogle = async () => {
+  try {
+    console.log('🔍 Google sign in via NineT Auth Worker...');
+    console.log('🔧 AUTH_WORKER_URL:', AUTH_WORKER_URL);
+    console.log('🔧 Platform:', Platform.OS);
+    
+    if (Platform.OS === 'web') {
+      // Web: Use the new auth worker
+      const redirectUrl = `${AUTH_WORKER_URL}/auth/google`;
+      window.location.href = redirectUrl;
+      return { error: null };
+    } else {
+      // ✅ Mobile: Create proper redirect URL and pass mobile context
+      const redirectUrl = Linking.createURL('auth/success');
+      console.log('📱 Mobile redirect URL:', redirectUrl);
       
-      if (Platform.OS === 'web') {
-        const { error } = await supabase.auth.signInWithOAuth({
-          provider: 'google',
-          options: {
-            redirectTo: `${process.env.EXPO_PUBLIC_SITE_URL}/auth/callback`
-          }
-        });
-        
-        if (error) {
-          console.error('❌ Google auth error:', error);
-        } else {
-          console.log('✅ Google auth initiated');
+      // Pass mobile context explicitly to worker
+      const workerOAuthUrl = `${AUTH_WORKER_URL}/auth/google?mobile=true&redirect_to=${encodeURIComponent(redirectUrl)}&platform=${Platform.OS}`;
+      
+      console.log('🔗 Opening OAuth via worker:', workerOAuthUrl);
+      
+      const result = await WebBrowser.openAuthSessionAsync(
+        workerOAuthUrl,
+        redirectUrl,
+        {
+          dismissButtonStyle: 'close',
+          readerMode: false,
+          enableBarCollapsing: true,
+          showInRecents: true
         }
+      );
+
+      console.log('🔄 WebBrowser result:', result);
+
+      if (result.type === 'success') {
+        console.log('✅ Google OAuth success via worker');
         
-        return { error };
-      } else {
-        Alert.alert(
-          'Coming Soon',
-          'Google sign-in for mobile is coming soon. Please use email/password for now.'
-        );
+        // Small delay to ensure session is established
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Force refresh session
+        const { data: { session }, error } = await supabase.auth.getSession();
+        console.log('🔄 Session after OAuth:', !!session, error);
+        
         return { error: null };
+      } else if (result.type === 'cancel') {
+        console.log('ℹ️ Google OAuth cancelled');
+        return { error: new Error('User cancelled') as AuthError };
+      } else {
+        console.log('❌ Google OAuth failed:', result);
+        return { error: new Error('Authentication failed') as AuthError };
       }
-    } catch (error) {
-      console.error('❌ Google auth exception:', error);
-      return { error: error as AuthError };
     }
-  };
+  } catch (error) {
+    console.error('❌ Google auth exception:', error);
+    return { error: error as AuthError };
+  }
+};
 
   // Same sign out as your PWA
   const signOut = async () => {
@@ -275,7 +342,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // UPDATED: Resend verification with your hosted page
+  // UPDATED: Resend verification using auth worker
   const resendVerification = async () => {
     if (!user?.email) {
       return { error: new Error('No user email found') as AuthError };
@@ -286,7 +353,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         type: 'signup',
         email: user.email,
         options: {
-          emailRedirectTo: 'https://auth.ninet.io/confirm'
+          emailRedirectTo: `${AUTH_WORKER_URL}/auth/confirm`
         }
       });
 
